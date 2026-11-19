@@ -16,6 +16,7 @@ class SnmpClient(
     private val bindSocket: (DatagramSocket) -> Unit = {},
     private val timeoutMs: Int = 900,
     private val retries: Int = 1,
+    private val port: Int = 161,
 ) {
     suspend fun get(target: SnmpTarget, oids: List<String>): List<VarBind>? = withContext(Dispatchers.IO) {
         exchange(target, SnmpCodec.GET, oids)?.takeIf { it.errorStatus == 0 }?.varBinds
@@ -76,7 +77,7 @@ class SnmpClient(
                 val address = InetAddress.getByName(target.ip)
                 val buf = ByteArray(65_535)
                 repeat(retries + 1) {
-                    socket.send(DatagramPacket(request, request.size, address, 161))
+                    socket.send(DatagramPacket(request, request.size, address, port))
                     val deadline = System.currentTimeMillis() + timeoutMs
                     while (System.currentTimeMillis() < deadline) {
                         val packet = DatagramPacket(buf, buf.size)
