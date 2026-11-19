@@ -19,16 +19,44 @@ data class Device(
     val isSelf: Boolean = false,
     /** Found only by its ARP reply: it ignores ping and every probed port (firewalled). */
     val firewalled: Boolean = false,
+    /** Information read over SNMP, when the device answered. */
+    val snmp: SnmpSummary? = null,
+    /** "Switch · port" where the device is plugged in, from the switches' MAC tables. */
+    val attachedTo: String? = null,
 ) {
     /** Best human-readable name, in the same preference order Advanced IP Scanner uses. */
     val displayName: String
         get() = when {
             isSelf -> netbiosName ?: mdnsName ?: hostname ?: "This device"
-            else -> netbiosName ?: mdnsName ?: upnp?.friendlyName ?: hostname ?: ip
+            else -> snmp?.name ?: netbiosName ?: mdnsName ?: upnp?.friendlyName ?: hostname ?: ip
         }
 
     val manufacturer: String?
         get() = vendor ?: upnp?.manufacturer
+}
+
+data class SnmpSummary(
+    val name: String?,
+    val description: String?,
+    val location: String?,
+    val isSwitch: Boolean,
+    val isRouter: Boolean,
+    val portCount: Int,
+    val lldpNeighbors: Int,
+    val macTableSize: Int,
+    /** This device's addresses, e.g. one per VLAN on a router. */
+    val addresses: List<String>,
+    val community: String,
+    val version: String,
+)
+
+/** A subnet (VLAN) to include in scans. */
+data class SubnetEntry(
+    val cidr: String,
+    val enabled: Boolean = true,
+    val source: Source = Source.MANUAL,
+) {
+    enum class Source { LOCAL, DISCOVERED, SNMP, MANUAL }
 }
 
 data class UpnpInfo(

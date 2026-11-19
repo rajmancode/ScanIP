@@ -2,6 +2,7 @@ package com.scanip.app.ui
 
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
@@ -42,6 +46,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -86,6 +92,7 @@ import com.scanip.app.ui.theme.OnlineGreen
 fun ScanIPApp(vm: ScanViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     var selectedIp by rememberSaveable { mutableStateOf<String?>(null) }
+    var tab by rememberSaveable { mutableStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { if (!state.scanning) vm.refreshNetwork() }
@@ -109,7 +116,8 @@ fun ScanIPApp(vm: ScanViewModel = viewModel()) {
             onWake = { vm.wake(selected) },
         )
     } else {
-        ScanScreen(state, vm, snackbar, onOpen = { selectedIp = it.ip })
+        if (tab != 0) BackHandler { tab = 0 }
+        ScanScreen(state, vm, snackbar, tab, onTab = { tab = it }, onOpen = { selectedIp = it })
     }
 }
 
@@ -119,7 +127,9 @@ private fun ScanScreen(
     state: ScanUiState,
     vm: ScanViewModel,
     snackbar: SnackbarHostState,
-    onOpen: (Device) -> Unit,
+    tab: Int,
+    onTab: (Int) -> Unit,
+    onOpen: (String) -> Unit,
 ) {
     val context = LocalContext.current
     var menuOpen by remember { mutableStateOf(false) }
@@ -174,62 +184,30 @@ private fun ScanScreen(
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
+        bottomBar = {
+            NavigationBar {
+                listOf(
+                    Triple("Devices", Icons.AutoMirrored.Filled.List, 0),
+                    Triple("Map", Icons.Filled.AccountTree, 1),
+                    Triple("Networks", Icons.Filled.Hub, 2),
+                ).forEach { (label, icon, index) ->
+                    NavigationBarItem(
+                        selected = tab == index,
+                        onClick = { onTab(index) },
+                        icon = { Icon(icon, contentDescription = null) },
+                        label = { Text(label) },
+                    )
+                }
+            }
+        },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(bottom = 96.dp),
-        ) {
-            item { NetworkCard(state.network) }
-            item {
-                OutlinedTextField(
-                    value = state.rangeInput,
-                    onValueChange = vm::setRange,
-                    label = { Text("IP range") },
-                    placeholder = { Text("192.168.1.1-254, 10.0.0.0/24") },
-                    singleLine = true,
-                    enabled = !state.scanning,
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
-                    trailingIcon = {
-                        IconButton(onClick = vm::resetRange, enabled = !state.scanning) {
-                            Icon(Icons.Filled.Refresh, contentDescription = "Use current subnet")
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                )
+        when (tab) {
+            1 -> Column(Modifier.fillMaxSize().padding(padding)) {
+                ProgressRow(state)
+                MapScreen(state, onOpen = onOpen, modifier = Modifier.weight(1f))
             }
-            item { ProgressRow(state) }
-            if (state.devices.isNotEmpty()) {
-                item {
-                    OutlinedTextField(
-                        value = state.filter,
-                        onValueChange = vm::setFilter,
-                        placeholder = { Text("Filter by name, IP, MAC, vendor, service") },
-                        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (state.filter.isNotEmpty()) IconButton(onClick = { vm.setFilter("") }) {
-                                Icon(Icons.Filled.Clear, contentDescription = "Clear filter")
-                            }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
-            }
-            val devices = state.visibleDevices
-            items(devices, key = { it.ip }) { d ->
-                DeviceRow(d, onClick = { onOpen(d) })
-                HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
-            }
-            if (state.devices.isEmpty() && !state.scanning) {
-                item {
-                    Text(
-                        "Tap Scan to discover devices on this network.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(24.dp),
-                    )
-                }
-            }
+            2 -> NetworksScreen(state, vm, Modifier.fillMaxSize().padding(padding))
+            else -> DeviceList(state, vm, onOpen, Modifier.fillMaxSize().padding(padding))
         }
     }
 
@@ -258,11 +236,90 @@ private fun ScanScreen(
                         "reverse DNS, NetBIOS, mDNS (Bonjour) and UPnP.\n\n" +
                         "Android 10 and later hide other devices' MAC addresses from apps, so a MAC is shown only " +
                         "when the device reports it itself (NetBIOS) or the system still exposes the ARP table.\n\n" +
-                        "Manufacturer names come from the IEEE OUI registry. Download it from the menu."
+                        "Manufacturer names come from the IEEE OUI registry. Download it from the menu.\n\n" +
+                        "With SNMP turned on (Networks tab), managed switches and routers report their MAC tables, " +
+                        "LLDP neighbours and VLAN addresses. The Map tab uses these to show which switch port each device is on."
                 )
                 }
             },
         )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun DeviceList(state: ScanUiState, vm: ScanViewModel, onOpen: (String) -> Unit, modifier: Modifier) {
+    LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 96.dp)) {
+        item { NetworkCard(state.network) }
+        item {
+            OutlinedTextField(
+                value = state.rangeInput,
+                onValueChange = vm::setRange,
+                label = { Text("IP range") },
+                placeholder = { Text("192.168.1.1-254, 10.0.0.0/24") },
+                singleLine = true,
+                enabled = !state.scanning,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
+                trailingIcon = {
+                    IconButton(onClick = vm::resetRange, enabled = !state.scanning) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "Use current subnet")
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+        item { ProgressRow(state) }
+        if (state.devices.isNotEmpty()) {
+            item {
+                OutlinedTextField(
+                    value = state.filter,
+                    onValueChange = vm::setFilter,
+                    placeholder = { Text("Filter by name, IP, MAC, vendor, service") },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                    trailingIcon = {
+                        if (state.filter.isNotEmpty()) IconButton(onClick = { vm.setFilter("") }) {
+                            Icon(Icons.Filled.Clear, contentDescription = "Clear filter")
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+        }
+        val devices = state.visibleDevices
+        val groups: List<Pair<String?, List<Device>>> = if (state.scannedSubnets.size > 1) {
+            devices.groupBy { state.subnetOf(it.ip) ?: "Other addresses" }.entries
+                .sortedBy { IpUtils.parseCidr(it.key)?.first ?: Long.MAX_VALUE }
+                .map { it.key to it.value }
+        } else listOf(null to devices)
+        for ((subnet, list) in groups) {
+            if (subnet != null) {
+                stickyHeader(key = "h:$subnet") {
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            "$subnet · ${list.size} device(s)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+            items(list, key = { it.ip }) { d ->
+                DeviceRow(d, onClick = { onOpen(d.ip) })
+                HorizontalDivider(modifier = Modifier.padding(start = 72.dp))
+            }
+        }
+        if (state.devices.isEmpty() && !state.scanning) {
+            item {
+                Text(
+                    "Tap Scan to discover devices on this network.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(24.dp),
+                )
+            }
+        }
     }
 }
 

@@ -81,6 +81,30 @@ object IpUtils {
         return result.toList()
     }
 
+    /** Parses "192.168.20.0/24" (any host address is accepted) into (network, prefix). */
+    fun parseCidr(text: String): Pair<Long, Int>? {
+        val parts = text.trim().split('/')
+        if (parts.size != 2) return null
+        val ip = toLong(parts[0]) ?: return null
+        val prefix = parts[1].toIntOrNull()?.takeIf { it in 8..32 } ?: return null
+        return (ip and mask(prefix)) to prefix
+    }
+
+    fun mask(prefix: Int): Long = if (prefix == 0) 0L else (0xFFFFFFFFL shl (32 - prefix)) and 0xFFFFFFFFL
+
+    fun cidr(ip: String, prefix: Int): String? = toLong(ip)?.let { "${toIp(it and mask(prefix))}/$prefix" }
+
+    fun cidrContains(cidr: String, ip: String): Boolean {
+        val (net, prefix) = parseCidr(cidr) ?: return false
+        val v = toLong(ip) ?: return false
+        return (v and mask(prefix)) == net
+    }
+
+    fun isPrivate(ip: String): Boolean {
+        val v = toLong(ip) ?: return false
+        return (v shr 24) == 10L || (v shr 20) == 0xAC1L || (v shr 16) == 0xC0A8L
+    }
+
     fun normalizeMac(raw: String?): String? {
         if (raw == null) return null
         val hex = raw.filter { it.isLetterOrDigit() }.uppercase()

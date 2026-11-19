@@ -8,6 +8,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.scanip.app.model.Device
 import com.scanip.app.model.NetworkSnapshot
+import com.scanip.app.model.SnmpSummary
+import com.scanip.app.model.SubnetEntry
+import com.scanip.app.net.Traceroute
+import com.scanip.app.net.snmp.SnmpClient
+import com.scanip.app.net.snmp.SnmpCodec
+import com.scanip.app.net.snmp.SnmpCollector
+import com.scanip.app.net.snmp.SnmpDetails
+import com.scanip.app.topology.TopoDevice
+import com.scanip.app.topology.Topology
+import com.scanip.app.topology.TopologyBuilder
 import com.scanip.app.net.ArpTable
 import com.scanip.app.net.HostProber
 import com.scanip.app.net.IpUtils
@@ -45,7 +55,18 @@ data class ScanUiState(
     val ouiBusy: Boolean = false,
     val portScansRunning: Set<String> = emptySet(),
     val lastScanFinishedAt: Long? = null,
+    /** Extra subnets (VLANs) to scan besides the range above. */
+    val subnets: List<SubnetEntry> = emptyList(),
+    val snmpEnabled: Boolean = true,
+    val snmpCommunities: String = "public",
+    val topology: Topology? = null,
+    /** Progress text while looking for VLANs, null when idle. */
+    val discovering: String? = null,
+    /** Subnets covered by the last scan, used to group the device list. */
+    val scannedSubnets: List<String> = emptyList(),
 ) {
+    fun subnetOf(ip: String): String? = scannedSubnets.firstOrNull { IpUtils.cidrContains(it, ip) }
+
     val sortedDevices: List<Device>
         get() = devices.values.sortedBy { it.ipValue }
 
@@ -55,7 +76,7 @@ data class ScanUiState(
             if (q.isEmpty()) return sortedDevices
             return sortedDevices.filter { d ->
                 listOfNotNull(d.ip, d.displayName, d.hostname, d.netbiosName, d.mdnsName, d.mac, d.manufacturer,
-                    d.upnp?.modelName).any { it.contains(q, ignoreCase = true) } ||
+                    d.upnp?.modelName, d.snmp?.description, d.attachedTo).any { it.contains(q, ignoreCase = true) } ||
                     d.openPorts.any { it.service.contains(q, ignoreCase = true) }
             }
         }
@@ -73,9 +94,131 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private var scanJob: Job? = null
     private var autoRange: String? = null
 
+    /** Full SNMP data from the last scan, keyed by device IP. */
+    private var snmpDetails: Map<String, SnmpDetails> = emptyMap()
+
     init {
         viewModelScope.launch { oui.load() }
+        _state.update {
+            it.copy(
+                subnets = loadSubnets(),
+                snmpEnabled = prefs.getBoolean(KEY_SNMP_ENABLED, true),
+                snmpCommunities = prefs.getString(KEY_SNMP_COMMUNITIES, "public") ?: "public",
+            )
+        }
         refreshNetwork()
+    }
+
+    // ----- Subnets (VLANs) and SNMP settings -----
+
+    private fun loadSubnets(): List<SubnetEntry> =
+        prefs.getString(KEY_SUBNETS, "").orEmpty().lines().mapNotNull { line ->
+            val p = line.split('|')
+            if (p.size < 3 || IpUtils.parseCidr(p[0]) == null) return@mapNotNull null
+            SubnetEntry(p[0], p[1] == "1", runCatching { SubnetEntry.Source.valueOf(p[2]) }.getOrDefault(SubnetEntry.Source.MANUAL))
+        }
+
+    private fun saveSubnets(list: List<SubnetEntry>) {
+        prefs.edit().putString(KEY_SUBNETS, list.joinToString("\n") { "${it.cidr}|${if (it.enabled) 1 else 0}|${it.source}" }).apply()
+    }
+
+    private fun updateSubnets(transform: (List<SubnetEntry>) -> List<SubnetEntry>) {
+        _state.update { s -> s.copy(subnets = transform(s.subnets)).also { saveSubnets(it.subnets) } }
+    }
+
+    /** Adds a subnet like "192.168.20.0/24". Returns an error message, or null on success. */
+    fun addSubnet(text: String, source: SubnetEntry.Source = SubnetEntry.Source.MANUAL): String? {
+        val parsed = IpUtils.parseCidr(text) ?: return "Use CIDR notation, e.g. 192.168.20.0/24"
+        val (net, prefix) = parsed
+        if (prefix < 20) return "That subnet is too large. Use /20 or smaller (up to ${IpUtils.MAX_HOSTS} hosts)."
+        val cidr = "${IpUtils.toIp(net)}/$prefix"
+        if (_state.value.subnets.any { it.cidr == cidr }) return null
+        updateSubnets { it + SubnetEntry(cidr, true, source) }
+        return null
+    }
+
+    fun setSubnetEnabled(cidr: String, enabled: Boolean) =
+        updateSubnets { list -> list.map { if (it.cidr == cidr) it.copy(enabled = enabled) else it } }
+
+    fun removeSubnet(cidr: String) = updateSubnets { list -> list.filter { it.cidr != cidr } }
+
+    fun setSnmpEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SNMP_ENABLED, enabled).apply()
+        _state.update { it.copy(snmpEnabled = enabled) }
+    }
+
+    fun setSnmpCommunities(text: String) {
+        prefs.edit().putString(KEY_SNMP_COMMUNITIES, text).apply()
+        _state.update { it.copy(snmpCommunities = text) }
+    }
+
+    private fun communities(): List<String> =
+        _state.value.snmpCommunities.split(',', ' ', '\n').map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("public") }
+
+    /**
+     * Looks for other VLANs: asks the gateway (and known routers) for their interface addresses over
+     * SNMP, then probes x.y.Z.1 and x.y.Z.254 across this network's /16 for gateways that answer.
+     */
+    fun discoverSubnets() {
+        if (_state.value.discovering != null || _state.value.scanning) return
+        viewModelScope.launch {
+            val snap = networkInfo.current()
+            val localIp = snap.localIp
+            val prefix = snap.prefixLength
+            if (localIp == null || prefix == null) {
+                _state.update { it.copy(message = "Connect to Wi-Fi or Ethernet first.") }
+                return@launch
+            }
+            val tools = tools(snap)
+            val ownCidr = IpUtils.cidr(localIp, prefix)
+            val found = linkedSetOf<Pair<String, SubnetEntry.Source>>()
+            try {
+                // 1) SNMP: interface addresses of the gateway and any router seen in the last scan.
+                if (_state.value.snmpEnabled) {
+                    _state.update { it.copy(discovering = "Asking routers over SNMP…") }
+                    val client = SnmpClient(tools.bind)
+                    val routers = (listOfNotNull(snap.gateway) + snmpDetails.filterValues { it.isRouter }.keys).distinct()
+                    for (r in routers) {
+                        val known = snmpDetails[r]
+                        val addresses = known?.addresses ?: run {
+                            val (target, system) = client.discover(r, communities()) ?: return@run emptyList()
+                            SnmpCollector(client).collect(target, system).addresses
+                        }
+                        for ((ip, p) in addresses) {
+                            if (p in 20..30) IpUtils.cidr(ip, p)?.let { found += it to SubnetEntry.Source.SNMP }
+                        }
+                    }
+                }
+
+                // 2) Gateway sweep across this /16.
+                if (IpUtils.isPrivate(localIp)) {
+                    val base = IpUtils.toLong(localIp)!! and 0xFFFF0000L
+                    val candidates = (0..255).flatMap { z -> listOf(base or (z.toLong() shl 8) or 1L, base or (z.toLong() shl 8) or 254L) }
+                        .map { IpUtils.toIp(it) }
+                        .filter { ownCidr == null || !IpUtils.cidrContains(ownCidr, it) }
+                    var done = 0
+                    _state.update { it.copy(discovering = "Probing gateways 0 / ${candidates.size}") }
+                    coroutineScope {
+                        val limiter = Semaphore(64)
+                        for (ip in candidates) launch {
+                            val alive = limiter.withPermit { tools.prober.probe(ip).alive }
+                            if (alive) IpUtils.cidr(ip, 24)?.let { synchronized(found) { found += it to SubnetEntry.Source.DISCOVERED } }
+                            val n = synchronized(this@ScanViewModel) { ++done }
+                            if (n % 16 == 0) _state.update { it.copy(discovering = "Probing gateways $n / ${candidates.size}") }
+                        }
+                    }
+                }
+            } finally {
+                val added = found.filter { (cidr, _) -> cidr != ownCidr }
+                    .count { (cidr, src) -> _state.value.subnets.none { it.cidr == cidr } && addSubnet(cidr, src) == null }
+                _state.update {
+                    it.copy(
+                        discovering = null,
+                        message = if (added == 0) "No new subnets found." else "Found $added new subnet(s). They are included in the next scan.",
+                    )
+                }
+            }
+        }
     }
 
     fun refreshNetwork() {
@@ -116,7 +259,16 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshNetwork()
         val s = _state.value
-        val targets = IpUtils.parseTargets(s.rangeInput)
+        val base = IpUtils.parseTargets(s.rangeInput)
+        val extra = s.subnets.filter { it.enabled }.flatMap { e ->
+            val (net, prefix) = IpUtils.parseCidr(e.cidr) ?: return@flatMap emptyList()
+            IpUtils.hostRange(IpUtils.toIp(net), prefix)?.toList().orEmpty()
+        }
+        val targets = base?.let { (it + extra).distinct().sorted() }
+        if (targets != null && targets.size > MAX_TOTAL_HOSTS) {
+            _state.update { it.copy(message = "Too many addresses (${targets.size}). Disable some subnets; the limit is $MAX_TOTAL_HOSTS.") }
+            return
+        }
         if (targets == null) {
             _state.update {
                 it.copy(message = "Invalid range. Use e.g. 192.168.1.1-254 or 192.168.1.0/24 (max ${IpUtils.MAX_HOSTS} hosts).")
@@ -126,14 +278,22 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         if (s.rangeInput != autoRange) prefs.edit().putString(KEY_RANGE, s.rangeInput).apply()
         else prefs.edit().remove(KEY_RANGE).apply()
 
-        scanJob = viewModelScope.launch { runScan(targets, s.network) }
+        val scanned = buildList {
+            s.network?.let { n -> if (n.localIp != null && n.prefixLength != null) IpUtils.cidr(n.localIp, n.prefixLength)?.let(::add) }
+            addAll(s.subnets.filter { it.enabled }.map { it.cidr })
+        }.distinct()
+        scanJob = viewModelScope.launch { runScan(targets, s.network, scanned) }
     }
 
-    private suspend fun runScan(targets: List<Long>, snap: NetworkSnapshot?) {
+    private suspend fun runScan(targets: List<Long>, snap: NetworkSnapshot?, scannedSubnets: List<String>) {
         val tools = tools(snap)
         val targetSet = targets.map { IpUtils.toIp(it) }.toHashSet()
+        snmpDetails = emptyMap()
         _state.update {
-            it.copy(scanning = true, devices = emptyMap(), scanned = 0, total = targets.size, phase = "Pinging hosts")
+            it.copy(
+                scanning = true, devices = emptyMap(), scanned = 0, total = targets.size, phase = "Pinging hosts",
+                topology = null, scannedSubnets = scannedSubnets,
+            )
         }
 
         val wifi = getApplication<Application>().applicationContext.getSystemService(WifiManager::class.java)
@@ -173,10 +333,99 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             }
             findFirewalledHosts(targets, snap, tools)
             mergeArp()
+            if (_state.value.snmpEnabled) querySnmp(tools)
+            val routes = traceSubnets(scannedSubnets, snap)
+            buildTopology(routes, scannedSubnets)
             _state.update { it.copy(lastScanFinishedAt = System.currentTimeMillis()) }
         } finally {
             try { lock?.release() } catch (_: Exception) {}
             _state.update { it.copy(scanning = false, phase = null) }
+        }
+    }
+
+    /** Asks every found device for SNMP data; switches and routers answer with their tables. */
+    private suspend fun querySnmp(tools: Tools) {
+        val ips = _state.value.devices.keys.filter { it != _state.value.network?.localIp }
+        if (ips.isEmpty()) return
+        _state.update { it.copy(scanned = 0, total = ips.size, phase = "Querying SNMP") }
+        val client = SnmpClient(tools.bind)
+        val collector = SnmpCollector(client)
+        val communities = communities()
+        val results = java.util.concurrent.ConcurrentHashMap<String, SnmpDetails>()
+        coroutineScope {
+            val probe = Semaphore(32)
+            val walk = Semaphore(4)
+            for (ip in ips) launch {
+                val hit = probe.withPermit { client.discover(ip, communities) }
+                _state.update { it.copy(scanned = it.scanned + 1) }
+                if (hit != null) {
+                    val details = walk.withPermit { collector.collect(hit.first, hit.second) }
+                    results[ip] = details
+                    updateDevice(ip) { it.copy(snmp = summarize(details)) }
+                }
+            }
+        }
+        snmpDetails = results.toMap()
+
+        // Router and switch ARP tables give MAC addresses for every VLAN.
+        val arp = HashMap<String, String>()
+        results.values.forEach { arp.putAll(it.arp) }
+        if (arp.isNotEmpty()) {
+            _state.update { s ->
+                s.copy(devices = s.devices.mapValues { (ip, d) ->
+                    val mac = d.mac ?: arp[ip]
+                    d.copy(mac = mac, vendor = d.vendor ?: oui.lookup(mac))
+                })
+            }
+        }
+    }
+
+    private fun summarize(d: SnmpDetails) = SnmpSummary(
+        name = d.sysName?.takeIf { it.isNotBlank() },
+        description = d.sysDescr?.takeIf { it.isNotBlank() },
+        location = d.sysLocation?.takeIf { it.isNotBlank() },
+        isSwitch = d.isSwitch,
+        isRouter = d.isRouter,
+        portCount = d.ports.size,
+        lldpNeighbors = d.lldp.size,
+        macTableSize = d.fdb.size,
+        addresses = d.addresses.map { (ip, p) -> "$ip/$p" },
+        community = d.target.community,
+        version = if (d.target.version == SnmpCodec.V2C) "v2c" else "v1",
+    )
+
+    /** Traceroute to one live host (or the .1) in every subnet that isn't ours. */
+    private suspend fun traceSubnets(subnets: List<String>, snap: NetworkSnapshot?): Map<String, List<String>> {
+        val own = snap?.let { n -> if (n.localIp != null && n.prefixLength != null) IpUtils.cidr(n.localIp, n.prefixLength) else null }
+        val remote = subnets.filter { it != own }
+        if (remote.isEmpty()) return emptyMap()
+        _state.update { it.copy(scanned = 0, total = remote.size, phase = "Tracing routes") }
+        val devices = _state.value.sortedDevices
+        val result = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+        coroutineScope {
+            for (subnet in remote) launch {
+                val target = devices.firstOrNull { IpUtils.cidrContains(subnet, it.ip) }?.ip
+                    ?: IpUtils.parseCidr(subnet)?.let { (net, _) -> IpUtils.toIp(net + 1) }
+                if (target != null) result[subnet] = Traceroute.routers(target)
+                _state.update { it.copy(scanned = it.scanned + 1) }
+            }
+        }
+        return result
+    }
+
+    private fun buildTopology(routes: Map<String, List<String>>, subnets: List<String>) {
+        val devices = _state.value.sortedDevices
+        val topo = TopologyBuilder(
+            devices = devices.map { TopoDevice(it.ip, it.mac, it.displayName, it.isGateway, it.isSelf) },
+            snmp = snmpDetails,
+            routes = routes,
+            subnets = subnets,
+        ).build()
+        _state.update { s ->
+            s.copy(
+                topology = topo,
+                devices = s.devices.mapValues { (ip, d) -> d.copy(attachedTo = topo.attachments[ip]) },
+            )
         }
     }
 
@@ -392,13 +641,14 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun exportCsv(): String {
-        val header = "Status,Name,IP,Manufacturer,MAC,Hostname,NetBIOS,Workgroup,mDNS,Model,Open ports,Latency ms"
+        val header = "Status,Name,IP,Manufacturer,MAC,Hostname,NetBIOS,Workgroup,mDNS,Model,Open ports,Latency ms,Connected to,SNMP description"
         val rows = _state.value.sortedDevices.map { d ->
             listOf(
                 if (d.isAlive) "Online" else "Offline", d.displayName, d.ip, d.manufacturer, d.mac, d.hostname,
                 d.netbiosName, d.workgroup, d.mdnsName,
                 listOfNotNull(d.upnp?.modelName, d.upnp?.modelNumber).joinToString(" "),
                 d.openPorts.joinToString(" ") { "${it.port}/${it.service}" }, d.latencyMs?.toString(),
+                d.attachedTo, d.snmp?.description,
             ).joinToString(",") { csv(it) }
         }
         return (listOf(header) + rows).joinToString("\n")
@@ -411,6 +661,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         private const val KEY_RANGE = "range"
+        private const val KEY_SUBNETS = "subnets"
+        private const val KEY_SNMP_ENABLED = "snmp_enabled"
+        private const val KEY_SNMP_COMMUNITIES = "snmp_communities"
+        private const val MAX_TOTAL_HOSTS = 16_384
         private const val SWEEP_PARALLELISM = 48
         private const val ENRICH_PARALLELISM = 24
         private const val NEIGHBOUR_PARALLELISM = 128

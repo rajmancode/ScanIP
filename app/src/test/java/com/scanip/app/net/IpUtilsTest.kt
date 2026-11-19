@@ -54,3 +54,22 @@ class IpUtilsTest {
         assertEquals(mapOf("192.168.1.1" to "11:22:33:44:55:66"), ArpTable.parseIpNeigh(out))
     }
 }
+
+class CidrTest {
+    @Test fun cidrHelpers() {
+        org.junit.Assert.assertEquals("192.168.20.0/24", IpUtils.cidr("192.168.20.77", 24))
+        org.junit.Assert.assertTrue(IpUtils.cidrContains("192.168.20.0/24", "192.168.20.5"))
+        org.junit.Assert.assertTrue(!IpUtils.cidrContains("192.168.20.0/24", "192.168.21.5"))
+        org.junit.Assert.assertTrue(IpUtils.isPrivate("172.20.1.1"))
+        org.junit.Assert.assertTrue(!IpUtils.isPrivate("8.8.8.8"))
+        org.junit.Assert.assertEquals("From 10.0.0.1", "From 10.0.0.1")
+        org.junit.Assert.assertEquals(
+            "10.0.0.1",
+            Traceroute.parseHop("From 10.0.0.1 icmp_seq=1 Time to live exceeded", "10.0.20.5"),
+        )
+        org.junit.Assert.assertEquals(
+            "10.0.20.5",
+            Traceroute.parseHop("64 bytes from 10.0.20.5: icmp_seq=1 ttl=63 time=2.1 ms", "10.0.20.5"),
+        )
+    }
+}

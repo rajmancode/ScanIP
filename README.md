@@ -34,6 +34,17 @@ release, and new versions install over the old one.
 - **Services.** A quick check during the sweep powers the HTTP, HTTPS, SSH, FTP, SMB, RDP, VNC and UPnP badges.
   The detail screen can scan about 70 common ports or a custom list. It grabs banners and page titles from HTTP,
   SSH and FTP.
+- **VLANs.** Add other subnets on the Networks tab, or tap **Find VLANs**. That reads the router's interface
+  addresses over SNMP and probes `x.y.Z.1` / `x.y.Z.254` across your /16. Scans then cover all enabled subnets,
+  and the device list is grouped by subnet. Another VLAN is reachable only when your router routes to it and its
+  firewall allows it.
+- **SNMP (v1/v2c).** Every found device is asked for its system info with your community strings. Managed
+  switches and routers also return interface names, ARP tables (MACs for every VLAN), bridge/Q-BRIDGE MAC tables
+  and LLDP neighbours.
+- **Network map.** The Map tab draws a zoomable diagram. Router → switches (exact links from LLDP, or inferred from
+  MAC tables and shown dashed) → each device on the port it is plugged into. Ports with several devices get an
+  "Unmanaged switch / AP" node. Without SNMP, devices are grouped by subnet under the router that serves it,
+  found by traceroute. Each device page shows **Connected to: switch · port**.
 - **Actions:** open a device's web UI in the browser, send Wake-on-LAN, copy the IP, ping again.
 - **Export:** share all results as CSV.
 - Filter and search, gateway and own-device markers, and Material 3 with dynamic colour and dark mode.

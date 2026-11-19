@@ -125,6 +125,7 @@ fun DeviceDetailScreen(
                 Field("IP address", device.ip)
                 Field("Response time", device.latencyMs?.let { "$it ms" })
                 if (device.firewalled) Field("Detection", "Answers ARP only. Its firewall blocks ping and ports.")
+                Field("Connected to", device.attachedTo)
                 Field("MAC address", device.mac ?: if (device.isSelf) "Hidden by Android" else "Not available")
                 Field("Manufacturer", device.manufacturer)
                 Field("DNS name", device.hostname)
@@ -133,6 +134,20 @@ fun DeviceDetailScreen(
                 Field("mDNS name", device.mdnsName)
                 if (device.isGateway) Field("Role", "Default gateway")
                 if (device.isSelf) Field("Role", "This device")
+            }
+
+            device.snmp?.let { n ->
+                Section("SNMP") {
+                    Field("System name", n.name)
+                    Field("Role", listOfNotNull("Router".takeIf { n.isRouter }, "Managed switch".takeIf { n.isSwitch }).joinToString(", ").ifEmpty { "Host" })
+                    Field("Description", n.description)
+                    Field("Location", n.location)
+                    if (n.portCount > 0) Field("Interfaces", n.portCount.toString())
+                    if (n.isSwitch) Field("MAC table", "${n.macTableSize} entries")
+                    if (n.lldpNeighbors > 0) Field("LLDP neighbours", n.lldpNeighbors.toString())
+                    if (n.addresses.isNotEmpty()) Field("Addresses", n.addresses.joinToString("\n"))
+                    Field("Access", "${n.version}, community \"${n.community}\"")
+                }
             }
 
             device.upnp?.let { u ->

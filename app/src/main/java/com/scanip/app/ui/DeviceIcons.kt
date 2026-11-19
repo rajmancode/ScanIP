@@ -3,6 +3,7 @@ package com.scanip.app.ui
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PhoneIphone
 import androidx.compose.material.icons.filled.Print
@@ -17,11 +18,12 @@ import com.scanip.app.model.Device
 /** Guesses a device category from its open ports, UPnP type and names. */
 fun deviceIcon(d: Device): ImageVector {
     val ports = d.openPorts.map { it.port }.toSet()
-    val text = listOfNotNull(d.upnp?.deviceType, d.upnp?.modelName, d.upnp?.manufacturer, d.displayName, d.vendor)
+    val text = listOfNotNull(d.upnp?.deviceType, d.upnp?.modelName, d.upnp?.manufacturer, d.displayName, d.vendor, d.snmp?.description)
         .joinToString(" ").lowercase()
     return when {
         d.isSelf -> Icons.Filled.PhoneAndroid
-        d.isGateway || "internetgateway" in text || "router" in text -> Icons.Filled.Router
+        d.isGateway || d.snmp?.isRouter == true || "internetgateway" in text || "router" in text -> Icons.Filled.Router
+        d.snmp?.isSwitch == true || "switch" in text -> Icons.Filled.Lan
         9100 in ports || 631 in ports || 515 in ports || "printer" in text -> Icons.Filled.Print
         "mediarenderer" in text || "tv" in text.split(' ') || "chromecast" in text || "roku" in text || 8009 in ports -> Icons.Filled.Tv
         "camera" in text || 554 in ports -> Icons.Filled.Videocam
@@ -45,5 +47,6 @@ fun serviceBadges(d: Device): List<String> {
         if (3389 in ports) add("RDP")
         if (5900 in ports) add("VNC")
         if (d.upnp != null) add("UPnP")
+        if (d.snmp != null) add("SNMP")
     }
 }
