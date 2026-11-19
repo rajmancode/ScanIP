@@ -4,6 +4,15 @@ An Android network scanner in the spirit of Advanced IP Scanner. It sweeps your 
 subnet and lists every device it finds, with names, manufacturer, MAC (where Android allows it)
 and running services.
 
+## Install on your phone
+
+On your Android phone, open this link to download the latest APK, then tap the file to install it:
+
+**https://github.com/rajmancode/ScanIP/releases/latest/download/ScanIP.apk**
+
+The first time, Android asks you to allow installing apps from your browser. Every push publishes a new
+release, and new versions install over the old one.
+
 ## Features
 
 - **Auto-detected range.** Reads your IP, prefix, gateway and DNS from the active Wi-Fi or Ethernet
@@ -46,7 +55,8 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 Every push runs the **Android build** GitHub Actions workflow. It runs the unit tests and uploads
 the debug and release APKs as a downloadable `ScanIP-apk` artifact.
-The release APK is signed with the debug key so it installs directly. Set up your own signing config before publishing it.
+Each push also publishes `ScanIP.apk` as a GitHub Release. The release APK is signed with
+`app/scanip-release.jks`, a key committed to the repo so sideloaded updates install cleanly. Use your own private key before publishing to an app store.
 
 ## Project layout
 

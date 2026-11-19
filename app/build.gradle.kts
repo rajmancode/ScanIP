@@ -12,18 +12,29 @@ android {
         applicationId = "com.scanip.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // CI passes its run number so every published APK upgrades the previous one.
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "1.0.$build"
         vectorDrawables { useSupportLibrary = true }
+    }
+
+    signingConfigs {
+        // A fixed key so new APKs install over old ones. It is committed for convenient
+        // sideloading only; use a private key kept outside the repo before publishing to a store.
+        create("sideload") {
+            storeFile = file("scanip-release.jks")
+            storePassword = "scanip-sideload"
+            keyAlias = "scanip"
+            keyPassword = "scanip-sideload"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key so the release APK installs out of the box.
-            // Replace with your own signing config before publishing.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("sideload")
         }
     }
 
