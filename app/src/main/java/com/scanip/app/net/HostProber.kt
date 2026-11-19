@@ -84,30 +84,39 @@ class HostProber(
      * Android apps cannot send or read ARP, but the kernel does ARP for every connect():
      *  - nobody at that address -> ARP fails and connect() errors with EHOSTUNREACH after ~3 s;
      *  - a firewalled host answers ARP, then silently drops the SYN -> connect() just times out.
-     * So a timeout (or any answer) means "present" and "no route to host" means "absent".
+     * So a timeout means [Presence.SILENT] and "no route to host" means [Presence.ABSENT].
+     *
+     * A device that left the network recently still has a cached ARP entry, and the kernel
+     * re-checks that entry (~5 s delay + 3 probes) before failing. Until then it also looks SILENT,
+     * so a SILENT result must be confirmed with [CONFIRM_TIMEOUT_MS].
      */
-    suspend fun neighbourProbe(ip: String, timeoutMs: Int = NEIGHBOUR_TIMEOUT_MS): Boolean = withContext(Dispatchers.IO) {
+    suspend fun neighbourProbe(ip: String, timeoutMs: Int = NEIGHBOUR_TIMEOUT_MS): Presence = withContext(Dispatchers.IO) {
         val socket = try { socketFactory.createSocket() } catch (_: IOException) { Socket() }
         try {
             socket.connect(InetSocketAddress(InetAddress.getByName(ip), 9), timeoutMs)
-            true
+            Presence.ANSWERED
         } catch (_: SocketTimeoutException) {
-            true
+            Presence.SILENT
         } catch (e: IOException) {
             val msg = e.message.orEmpty()
             when {
-                msg.contains("refused", ignoreCase = true) -> true
-                msg.contains("timed out", ignoreCase = true) || msg.contains("ETIMEDOUT") -> true
-                else -> false // EHOSTUNREACH / ENETUNREACH: nothing answered ARP
+                msg.contains("refused", ignoreCase = true) -> Presence.ANSWERED
+                msg.contains("timed out", ignoreCase = true) || msg.contains("ETIMEDOUT") -> Presence.SILENT
+                else -> Presence.ABSENT // EHOSTUNREACH / ENETUNREACH: nothing answered ARP
             }
         } catch (_: Exception) {
-            false
+            Presence.ABSENT
         } finally {
             try { socket.close() } catch (_: IOException) {}
         }
     }
 
+    enum class Presence { ANSWERED, SILENT, ABSENT }
+
     companion object {
+        /** Long enough for a stale ARP entry to be re-checked and fail (5 s delay + 3 x 1 s probes). */
+        const val CONFIRM_TIMEOUT_MS = 12_000
+
         /** Longer than the kernel's ARP give-up time (3 probes x 1 s) so absent hosts fail first. */
         const val NEIGHBOUR_TIMEOUT_MS = 4500
         private val PING_TIME = Regex("time[=<]([0-9.]+)")

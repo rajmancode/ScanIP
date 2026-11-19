@@ -192,12 +192,29 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         if (remaining.isEmpty()) return
         _state.update { it.copy(scanned = 0, total = remaining.size, phase = "Looking for firewalled hosts") }
 
-        val present = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val candidates = java.util.Collections.synchronizedList(mutableListOf<String>())
         coroutineScope {
             val limiter = Semaphore(NEIGHBOUR_PARALLELISM)
             for (ip in remaining) {
                 launch {
-                    if (limiter.withPermit { tools.prober.neighbourProbe(ip) }) present.add(ip)
+                    val p = limiter.withPermit { tools.prober.neighbourProbe(ip) }
+                    if (p != HostProber.Presence.ABSENT) candidates.add(ip)
+                    _state.update { it.copy(scanned = it.scanned + 1) }
+                }
+            }
+        }
+        if (candidates.isEmpty()) return
+
+        // Confirm with a long wait: devices that recently left are still in the ARP cache and
+        // only fail once the kernel has re-checked them. A device that is really there stays silent.
+        _state.update { it.copy(scanned = 0, total = candidates.size, phase = "Confirming firewalled hosts") }
+        val present = java.util.Collections.synchronizedList(mutableListOf<String>())
+        coroutineScope {
+            val limiter = Semaphore(NEIGHBOUR_PARALLELISM)
+            for (ip in candidates.toList()) {
+                launch {
+                    val p = limiter.withPermit { tools.prober.neighbourProbe(ip, HostProber.CONFIRM_TIMEOUT_MS) }
+                    if (p != HostProber.Presence.ABSENT) present.add(ip)
                     _state.update { it.copy(scanned = it.scanned + 1) }
                 }
             }
@@ -324,9 +341,24 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val tools = tools(_state.value.network)
             val r = tools.prober.probe(ip)
-            updateDevice(ip) { it.copy(isAlive = r.alive, latencyMs = r.latencyMs) }
-            _state.update { it.copy(message = if (r.alive) "$ip is up (${r.latencyMs ?: "?"} ms)" else "$ip did not respond") }
-            if (r.alive) enrich(ip, tools)
+            if (r.alive) {
+                updateDevice(ip) { it.copy(isAlive = true, latencyMs = r.latencyMs, firewalled = false) }
+                _state.update { it.copy(message = "$ip is up (${r.latencyMs ?: "?"} ms)") }
+                enrich(ip, tools)
+                return@launch
+            }
+            // No ping or TCP reply: check whether it still answers ARP (firewalled host).
+            val onLink = state.value.network?.let { n ->
+                if (n.localIp == null || n.prefixLength == null) false
+                else IpUtils.hostRange(n.localIp, n.prefixLength)?.contains(IpUtils.toLong(ip) ?: -1) == true
+            } == true
+            _state.update { it.copy(message = "No ping reply from $ip, checking ARP…") }
+            val present = onLink &&
+                tools.prober.neighbourProbe(ip, HostProber.CONFIRM_TIMEOUT_MS) != HostProber.Presence.ABSENT
+            updateDevice(ip) { it.copy(isAlive = present, latencyMs = null, firewalled = present || it.firewalled) }
+            _state.update {
+                it.copy(message = if (present) "$ip is up (firewalled, answers ARP only)" else "$ip did not respond")
+            }
         }
     }
 
