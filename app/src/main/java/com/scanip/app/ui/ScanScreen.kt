@@ -222,7 +222,8 @@ private fun ScanScreen(
             title = { Text("About ScanIP") },
             text = {
                 Text(
-                    "ScanIP finds devices with ping and TCP probes, then asks each one for its name over " +
+                    "ScanIP finds devices with ping and TCP probes. Devices that block both are then found by their ARP " +
+                        "reply. It then asks each one for its name over " +
                         "reverse DNS, NetBIOS, mDNS (Bonjour) and UPnP.\n\n" +
                         "Android 10 and later hide other devices' MAC addresses from apps, so a MAC is shown only " +
                         "when the device reports it itself (NetBIOS) or the system still exposes the ARP table.\n\n" +
@@ -284,7 +285,10 @@ private fun ProgressRow(state: ScanUiState) {
         if (state.scanning || state.devices.isNotEmpty()) {
             Text(
                 buildString {
-                    if (state.scanning) append("Scanned ${state.scanned} of ${state.total} · ")
+                    if (state.scanning) {
+                        state.phase?.let { append(it).append(": ") }
+                        append("${state.scanned} of ${state.total} · ")
+                    }
                     append("${state.devices.size} device(s) found")
                 },
                 style = MaterialTheme.typography.labelLarge,
@@ -324,6 +328,7 @@ private fun DeviceRow(d: Device, onClick: () -> Unit) {
                 )
                 if (d.isGateway) Tag("Gateway")
                 if (d.isSelf) Tag("You")
+                if (d.firewalled) Tag("Firewalled")
             }
             Text(d.ip, style = MaterialTheme.typography.bodyMedium, fontFamily = FontFamily.Monospace)
             val sub = listOfNotNull(d.manufacturer, d.mac).joinToString(" · ")

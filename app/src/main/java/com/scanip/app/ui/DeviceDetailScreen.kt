@@ -124,6 +124,7 @@ fun DeviceDetailScreen(
                 Field("Status", if (device.isAlive) "Online" else "Offline")
                 Field("IP address", device.ip)
                 Field("Response time", device.latencyMs?.let { "$it ms" })
+                if (device.firewalled) Field("Detection", "Answers ARP only. Its firewall blocks ping and ports.")
                 Field("MAC address", device.mac ?: if (device.isSelf) "Hidden by Android" else "Not available")
                 Field("Manufacturer", device.manufacturer)
                 Field("DNS name", device.hostname)

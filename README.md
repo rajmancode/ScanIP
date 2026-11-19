@@ -19,7 +19,11 @@ release, and new versions install over the old one.
   connection, ignoring cellular and VPN. You can also enter ranges by hand: `192.168.1.1-254`,
   `10.0.0.0/24`, `192.168.1.10-192.168.1.50`, or comma-separated lists. A scan covers up to 4096 hosts.
 - **Host discovery** using ICMP ping (the system `ping` binary, no root needed) with a fallback to TCP probes.
-  A refused TCP connection still counts as "up", so firewalled hosts are found too.
+  A refused TCP connection still counts as "up".
+- **Firewalled hosts.** Windows PCs on a "Public" network, for example, ignore ping and all ports. A second pass
+  finds them through ARP: the phone's kernel resolves each address before connecting. An empty address fails with
+  "no route to host", while a firewalled device answers ARP and the connection just times out. These devices are
+  tagged *Firewalled*.
 - **Names** come from reverse DNS (asks your router directly), NetBIOS node status (Windows and Samba
   names, workgroup and MAC), unicast mDNS/Bonjour (Apple, Linux, Android) and UPnP/SSDP (friendly name,
   manufacturer, model, serial).

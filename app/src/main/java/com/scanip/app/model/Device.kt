@@ -17,6 +17,8 @@ data class Device(
     val portsScanned: Boolean = false,
     val isGateway: Boolean = false,
     val isSelf: Boolean = false,
+    /** Found only by its ARP reply: it ignores ping and every probed port (firewalled). */
+    val firewalled: Boolean = false,
 ) {
     /** Best human-readable name, in the same preference order Advanced IP Scanner uses. */
     val displayName: String

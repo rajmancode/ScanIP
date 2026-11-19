@@ -37,6 +37,8 @@ data class ScanUiState(
     val scanning: Boolean = false,
     val scanned: Int = 0,
     val total: Int = 0,
+    /** Text describing the current scan stage, shown above the progress bar. */
+    val phase: String? = null,
     val filter: String = "",
     val message: String? = null,
     val ouiInstalled: Boolean = false,
@@ -130,7 +132,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun runScan(targets: List<Long>, snap: NetworkSnapshot?) {
         val tools = tools(snap)
         val targetSet = targets.map { IpUtils.toIp(it) }.toHashSet()
-        _state.update { it.copy(scanning = true, devices = emptyMap(), scanned = 0, total = targets.size) }
+        _state.update {
+            it.copy(scanning = true, devices = emptyMap(), scanned = 0, total = targets.size, phase = "Pinging hosts")
+        }
 
         val wifi = getApplication<Application>().applicationContext.getSystemService(WifiManager::class.java)
         val lock = try {
@@ -167,11 +171,51 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
+            findFirewalledHosts(targets, snap, tools)
             mergeArp()
             _state.update { it.copy(lastScanFinishedAt = System.currentTimeMillis()) }
         } finally {
             try { lock?.release() } catch (_: Exception) {}
-            _state.update { it.copy(scanning = false) }
+            _state.update { it.copy(scanning = false, phase = null) }
+        }
+    }
+
+    /** Second pass for hosts that ignored ping and TCP: detects them by their ARP reply. */
+    private suspend fun findFirewalledHosts(targets: List<Long>, snap: NetworkSnapshot?, tools: Tools) {
+        // Only addresses on our own link get ARP; routed addresses would all just time out.
+        val local = if (snap?.localIp != null && snap.prefixLength != null) {
+            IpUtils.hostRange(snap.localIp, snap.prefixLength)
+        } else null
+        if (local == null) return
+        val found = _state.value.devices.keys
+        val remaining = targets.filter { it in local }.map { IpUtils.toIp(it) }.filter { it !in found }
+        if (remaining.isEmpty()) return
+        _state.update { it.copy(scanned = 0, total = remaining.size, phase = "Looking for firewalled hosts") }
+
+        val present = java.util.Collections.synchronizedList(mutableListOf<String>())
+        coroutineScope {
+            val limiter = Semaphore(NEIGHBOUR_PARALLELISM)
+            for (ip in remaining) {
+                launch {
+                    if (limiter.withPermit { tools.prober.neighbourProbe(ip) }) present.add(ip)
+                    _state.update { it.copy(scanned = it.scanned + 1) }
+                }
+            }
+        }
+        // Some routers answer ARP for every address (proxy ARP). Then this test means nothing.
+        if (remaining.size >= 16 && present.size > remaining.size * 0.6) {
+            _state.update {
+                it.copy(message = "This network answers ARP for every address, so firewalled hosts can't be detected.")
+            }
+            return
+        }
+        coroutineScope {
+            val enrich = Semaphore(ENRICH_PARALLELISM)
+            for (ip in present) {
+                ensureDevice(ip, snap)
+                updateDevice(ip) { it.copy(firewalled = true) }
+                launch { enrich.withPermit { enrich(ip, tools) } }
+            }
         }
     }
 
@@ -337,5 +381,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         private const val KEY_RANGE = "range"
         private const val SWEEP_PARALLELISM = 48
         private const val ENRICH_PARALLELISM = 24
+        private const val NEIGHBOUR_PARALLELISM = 128
     }
 }
