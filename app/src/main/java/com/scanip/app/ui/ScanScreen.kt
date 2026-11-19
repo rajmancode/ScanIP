@@ -50,7 +50,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,7 +60,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +73,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.scanip.app.BuildConfig
+import com.scanip.app.R
 import com.scanip.app.ScanUiState
 import com.scanip.app.ScanViewModel
 import com.scanip.app.model.Device
@@ -122,8 +127,21 @@ private fun ScanScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("ScanIP") },
+            CenterAlignedTopAppBar(
+                title = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Image(
+                            painter = painterResource(R.drawable.rajmantech_logo),
+                            contentDescription = stringResource(R.string.brand_name),
+                            modifier = Modifier.height(26.dp),
+                        )
+                        Text(
+                            stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                },
                 actions = {
                     if (state.devices.isNotEmpty()) {
                         IconButton(onClick = {
@@ -221,6 +239,19 @@ private fun ScanScreen(
             confirmButton = { TextButton(onClick = { showAbout = false }) { Text("OK") } },
             title = { Text("About ScanIP") },
             text = {
+                Column {
+                Image(
+                    painter = painterResource(R.drawable.rajmantech_logo),
+                    contentDescription = stringResource(R.string.brand_name),
+                    modifier = Modifier.height(36.dp),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "ScanIP ${BuildConfig.VERSION_NAME} by RajmanTech",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(12.dp))
                 Text(
                     "ScanIP finds devices with ping and TCP probes. Devices that block both are then found by their ARP " +
                         "reply. It then asks each one for its name over " +
@@ -229,6 +260,7 @@ private fun ScanScreen(
                         "when the device reports it itself (NetBIOS) or the system still exposes the ARP table.\n\n" +
                         "Manufacturer names come from the IEEE OUI registry. Download it from the menu."
                 )
+                }
             },
         )
     }

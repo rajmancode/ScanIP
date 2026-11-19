@@ -1,5 +1,7 @@
 # ScanIP
 
+*by RajmanTech*
+
 An Android network scanner in the spirit of Advanced IP Scanner. It sweeps your Wi-Fi or Ethernet
 subnet and lists every device it finds, with names, manufacturer, MAC (where Android allows it)
 and running services.

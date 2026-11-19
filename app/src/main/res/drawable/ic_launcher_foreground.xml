@@ -1,15 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ScanIP icon in the RajmanTech style: the brand hexagon with a radar sweep and the amber node. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="3"
-        android:pathData="M54,30a24,24 0 1,1 0,48a24,24 0 1,1 0,-48z" />
-    <path android:fillColor="#00000000" android:strokeColor="#90CAF9" android:strokeWidth="3"
-        android:pathData="M54,42a12,12 0 1,1 0,24a12,12 0 1,1 0,-24z" />
-    <path android:fillColor="#FFFFFF" android:pathData="M54,50a4,4 0 1,1 0,8a4,4 0 1,1 0,-8z" />
-    <path android:fillColor="#FFFFFF" android:strokeColor="#FFFFFF" android:strokeWidth="3"
-        android:pathData="M54,54L71,37" />
-    <path android:fillColor="#A5D6A7" android:pathData="M68,32a4,4 0 1,1 0,8a4,4 0 1,1 0,-8z" />
-    <path android:fillColor="#A5D6A7" android:pathData="M36,62a3.5,3.5 0 1,1 0,7a3.5,3.5 0 1,1 0,-7z" />
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <group android:scaleX="0.55" android:scaleY="0.55" android:translateX="21" android:translateY="21">
+        <path android:pathData="M60,6 L106.8,33 L106.8,87 L60,114 L13.2,87 L13.2,33 Z" android:strokeWidth="8" android:strokeLineJoin="round">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="20" android:startY="10" android:endX="100" android:endY="112">
+                    <item android:offset="0" android:color="#2DD4BF" />
+                    <item android:offset="1" android:color="#0F2A44" />
+                </gradient>
+            </aapt:attr>
+            <aapt:attr name="android:strokeColor">
+                <gradient android:type="linear" android:startX="20" android:startY="10" android:endX="100" android:endY="112">
+                    <item android:offset="0" android:color="#2DD4BF" />
+                    <item android:offset="1" android:color="#0F2A44" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <!-- Radar rings -->
+        <path android:pathData="M60,32 a28,28 0 1,1 0,56 a28,28 0 1,1 0,-56 Z" android:strokeColor="#FFFFFF" android:strokeWidth="7" />
+        <path android:pathData="M60,47 a13,13 0 1,1 0,26 a13,13 0 1,1 0,-26 Z" android:strokeColor="#FFFFFF" android:strokeWidth="6" android:strokeAlpha="0.8" />
+        <!-- Sweep line from the centre to the found device -->
+        <path android:pathData="M60,60 L78.5,41.5" android:strokeColor="#FFFFFF" android:strokeWidth="7" android:strokeLineCap="round" />
+        <path android:pathData="M54.5,60 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0 Z" android:fillColor="#FFFFFF" />
+        <!-- Amber node, as on the RajmanTech "R" -->
+        <path android:pathData="M74.5,39.5 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0 Z" android:fillColor="#F59E0B" android:strokeColor="#FFFFFF" android:strokeWidth="3" />
+    </group>
 </vector>
